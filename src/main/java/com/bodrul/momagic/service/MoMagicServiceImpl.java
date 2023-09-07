@@ -2,8 +2,8 @@ package com.bodrul.momagic.service;
 
 import com.bodrul.momagic.model.*;
 import com.bodrul.momagic.repository.*;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,6 +24,7 @@ public class MoMagicServiceImpl {
     final ChargeFailLogEntityRepository chargeFailLogEntityRepository;
     final ChargeSuccessLogEntityRepository chargeSuccessLogEntityRepository;
     private Optional<AppConfEntity> config;
+    Logger logger = LoggerFactory.getLogger("MoMagic Log");
 
     public MoMagicServiceImpl(AppConfEntityRepository appConfEntityRepository, InboxEntityRepository inboxEntityRepository, ChargeConfEntityRepository chargeConfEntityRepository, KeywordDetailsEntityRepository keywordDetailsEntityRepository, ChargeFailLogEntityRepository chargeFailLogEntityRepository, ChargeSuccessLogEntityRepository chargeSuccessLogEntityRepository) {
         this.appConfEntityRepository = appConfEntityRepository;
@@ -39,58 +40,56 @@ public class MoMagicServiceImpl {
         while (true) {
             checkAppConfigStatus();
 
-            Pageable pageable = PageRequest.of(0,config.get().getNumberOfRow());
+            Pageable pageable = PageRequest.of(0, config.get().getNumberOfRow());
             List<InboxEntity> inboxList = inboxEntityRepository.findByStatusOrderById("N", pageable);
 
-            if (!inboxList.isEmpty()){
+            if (!inboxList.isEmpty()) {
                 inboxList.forEach(inbox -> {
                     checkAppConfigStatus();
                     String smsText = inbox.getSmsText();
                     String keyword = smsText.split(" ")[0];
 
                     Optional<KeywordDetailsEntity> keywordDetails = keywordDetailsEntityRepository.findByKeyword(keyword);
-                   if (keywordDetails.isPresent()){
+                    if (keywordDetails.isPresent()) {
 
-                       String unlockUrlPattern = keywordDetails.get().getUnlockurl();
-                       String chargeUrlPattern = keywordDetails.get().getChargeurl();
+                        String unlockUrlPattern = keywordDetails.get().getUnlockurl();
+                        String chargeUrlPattern = keywordDetails.get().getChargeurl();
 
-                       String unlockUrl = unlockUrlPattern.replace("<sms_text>", inbox.getSmsText());
-                       String unlockCode = "";
-                       String charge = "";
-                       try {
-                           String response = RestClient.getResponse(unlockUrl);
-                           unlockCode = response.split("::")[0];
-                           charge = response.split("::")[1];
-                       } catch (Exception e) {
-                           throw new RuntimeException(e);
-                       }
+                        String unlockUrl = unlockUrlPattern.replace("<sms_text>", inbox.getSmsText());
+                        String unlockCode = "";
+                        String charge = "";
+                        try {
+                            String response = RestClient.getResponse(unlockUrl);
+                            unlockCode = response.split("::")[0];
+                            charge = response.split("::")[1];
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
 
-                       if (unlockCode ==null || unlockCode.isEmpty()){
-                           return;
-                       }
-                       Optional<ChargeConfEntity> chargeConfig = chargeConfEntityRepository.findByPrice(Integer.parseInt(charge));
+                        if (unlockCode == null || unlockCode.isEmpty()) {
+                            return;
+                        }
+                        Optional<ChargeConfEntity> chargeConfig = chargeConfEntityRepository.findByPrice(Integer.parseInt(charge));
 
-                       if (chargeConfig.isPresent()){
-                           String chargeCode = chargeConfig.get().getChargeCode();
+                        if (chargeConfig.isPresent()) {
+                            String chargeCode = chargeConfig.get().getChargeCode();
 
-                           String chargeUrl = chargeUrlPattern.replace("<charge_code>", chargeCode).replace("<msisdn>",inbox.getMsisdn());
+                            String chargeUrl = chargeUrlPattern.replace("<charge_code>", chargeCode).replace("<msisdn>", inbox.getMsisdn());
 
-                           try {
-                               String response = RestClient.getResponse(chargeUrl);
-                               String[] responses = response.split("::");
-                               String txn = responses[0];
-                               String responseCode = responses[1];
-                               String responseMsg = responses[2];
-                               switch (responseCode){
-                                   case "100" -> processSuccess(inbox,responses,chargeConfig,keywordDetails);
-                                   default -> processFailed(inbox,responses,chargeConfig,keywordDetails);
-                               }
-                           } catch (Exception e) {
-                               throw new RuntimeException(e);
-                           }
-                       }
+                            try {
+                                String response = RestClient.getResponse(chargeUrl);
+                                String[] responses = response.split("::");
+                                String responseCode = responses[1];
+                                switch (responseCode) {
+                                    case "100" -> processSuccess(inbox, responses, chargeConfig, keywordDetails);
+                                    default -> processFailed(inbox, responses, chargeConfig, keywordDetails);
+                                }
+                            } catch (Exception e) {
+                                logger.info(e.getMessage());
+                            }
+                        }
 
-                   }
+                    }
                 });
             }
 
@@ -100,8 +99,8 @@ public class MoMagicServiceImpl {
 
     private void checkAppConfigStatus() {
         config = appConfEntityRepository.findById(1);
-        if (config.isEmpty() || config.get().getStatus() == 0){
-            System.out.println("AppConfig Status 0, Exiting app...");
+        if (config.isEmpty() || config.get().getStatus() == 0) {
+            logger.info("AppConfig Status 0, Exiting app...");
             System.exit(1);
         }
     }
@@ -110,19 +109,9 @@ public class MoMagicServiceImpl {
 
         inbox.setStatus("S");
         inboxEntityRepository.save(inbox);
-        ChargeSuccessLogEntity ce = new ChargeSuccessLogEntity()
-                .setSmsId(inbox.getId())
-                .setMsisdn(inbox.getMsisdn())
-                .setKeywordId(keywordDetails.get().getId())
-                .setAmount(chargeConfig.get().getPrice())
-                .setAmountWithVat(chargeConfig.get().getPriceWithVat())
-                .setValidity(chargeConfig.get().getValidity())
-                .setChargeId(chargeConfig.get().getId())
-                .setInsDate(Timestamp.valueOf(LocalDateTime.now()))
-                .setTidRef(responses[0])
-                .setResponse(responses[2]);
-        System.out.println("Success: " + inbox.getId()+ " "+ inbox.getSmsText());
+        ChargeSuccessLogEntity ce = new ChargeSuccessLogEntity().setSmsId(inbox.getId()).setMsisdn(inbox.getMsisdn()).setKeywordId(keywordDetails.get().getId()).setAmount(chargeConfig.get().getPrice()).setAmountWithVat(chargeConfig.get().getPriceWithVat()).setValidity(chargeConfig.get().getValidity()).setChargeId(chargeConfig.get().getId()).setInsDate(Timestamp.valueOf(LocalDateTime.now())).setTidRef(responses[0]).setResponse(responses[2]);
 
+        logger.info("Success ("+ responses[1]+ ") "+ "inbox id : " + inbox.getId() + " TxnId: " + ce.getTidRef() + " MobileNo: " + inbox.getMsisdn() + " SMS:" + inbox.getSmsText());
         chargeSuccessLogEntityRepository.save(ce);
     }
 
@@ -130,19 +119,10 @@ public class MoMagicServiceImpl {
     private void processFailed(InboxEntity inbox, String[] responses, Optional<ChargeConfEntity> chargeConfig, Optional<KeywordDetailsEntity> keywordDetails) {
         inbox.setStatus("F");
         inboxEntityRepository.save(inbox);
-        ChargeFailLogEntity ce = new ChargeFailLogEntity()
-                .setSmsId(inbox.getId())
-                .setMsisdn(inbox.getMsisdn())
-                .setKeywordId(keywordDetails.get().getId())
-                .setAmount(chargeConfig.get().getPrice())
-                .setChargeId(chargeConfig.get().getId())
-                .setFailCode(Integer.parseInt(responses[1]))
-                .setInsDate(Timestamp.valueOf(LocalDateTime.now()))
-                .setTidRef(responses[0])
-                .setResponse(responses[2]);
+        ChargeFailLogEntity ce = new ChargeFailLogEntity().setSmsId(inbox.getId()).setMsisdn(inbox.getMsisdn()).setKeywordId(keywordDetails.get().getId()).setAmount(chargeConfig.get().getPrice()).setChargeId(chargeConfig.get().getId()).setFailCode(Integer.parseInt(responses[1])).setInsDate(Timestamp.valueOf(LocalDateTime.now())).setTidRef(responses[0]).setResponse(responses[2]);
         chargeFailLogEntityRepository.save(ce);
-        System.out.println("Failed: " + inbox.getId()+ " "+ inbox.getSmsText());
 
+        logger.info("Failed ("+ responses[1]+ ") "+ "inbox id : " + inbox.getId() + " TxnId: " + ce.getTidRef() + " MobileNo: " + inbox.getMsisdn() + " SMS:" + inbox.getSmsText());
     }
 
 

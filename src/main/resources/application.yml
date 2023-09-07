@@ -5,7 +5,10 @@ spring:
     password: bodrul
     driver-class-name: com.mysql.cj.jdbc.Driver
 
-
 logging:
   level:
-    root: off
+    root: info
+  file:
+    name: momagic.log.txt
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss} - %msg%n'
