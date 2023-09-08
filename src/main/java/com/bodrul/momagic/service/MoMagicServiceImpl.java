@@ -16,7 +16,8 @@ import java.util.Optional;
 
 @Service
 public class MoMagicServiceImpl {
-
+    public static long success = 0;
+    public static long failed = 0;
     final AppConfEntityRepository appConfEntityRepository;
     final InboxEntityRepository inboxEntityRepository;
     final ChargeConfEntityRepository chargeConfEntityRepository;
@@ -35,6 +36,8 @@ public class MoMagicServiceImpl {
         this.chargeSuccessLogEntityRepository = chargeSuccessLogEntityRepository;
     }
 
+    long sl = 0L;
+
     @Scheduled(fixedDelay = 1)
     public void runThis() {
         while (true) {
@@ -42,7 +45,6 @@ public class MoMagicServiceImpl {
 
             Pageable pageable = PageRequest.of(0, config.get().getNumberOfRow());
             List<InboxEntity> inboxList = inboxEntityRepository.findByStatusOrderById("N", pageable);
-
             if (!inboxList.isEmpty()) {
                 inboxList.forEach(inbox -> {
                     checkAppConfigStatus();
@@ -51,7 +53,9 @@ public class MoMagicServiceImpl {
 
                     Optional<KeywordDetailsEntity> keywordDetails = keywordDetailsEntityRepository.findByKeyword(keyword);
                     if (keywordDetails.isPresent()) {
-
+                        logger.info("");
+                        logger.info("------------------------------------------------------------------------------------- " + ++sl);
+                        logger.info("Processing inbox id : " + inbox.getId());
                         String unlockUrlPattern = keywordDetails.get().getUnlockurl();
                         String chargeUrlPattern = keywordDetails.get().getChargeurl();
 
@@ -59,8 +63,10 @@ public class MoMagicServiceImpl {
                         String unlockCode = "";
                         String charge = "";
                         try {
+                            logger.info("Getting unlock code from api ...");
                             String response = RestClient.getResponse(unlockUrl);
                             unlockCode = response.split("::")[0];
+                            logger.info("Unlock Code found : " + unlockCode);
                             charge = response.split("::")[1];
                         } catch (Exception e) {
                             throw new RuntimeException(e);
@@ -77,6 +83,8 @@ public class MoMagicServiceImpl {
                             String chargeUrl = chargeUrlPattern.replace("<charge_code>", chargeCode).replace("<msisdn>", inbox.getMsisdn());
 
                             try {
+                                logger.info("Charge code: " + chargeCode + ", msisdn: " + inbox.getMsisdn());
+                                logger.info("Getting response from api ...");
                                 String response = RestClient.getResponse(chargeUrl);
                                 String[] responses = response.split("::");
                                 String responseCode = responses[1];
@@ -106,23 +114,24 @@ public class MoMagicServiceImpl {
     }
 
     private void processSuccess(InboxEntity inbox, String[] responses, Optional<ChargeConfEntity> chargeConfig, Optional<KeywordDetailsEntity> keywordDetails) {
-
+        success++;
         inbox.setStatus("S");
         inboxEntityRepository.save(inbox);
         ChargeSuccessLogEntity ce = new ChargeSuccessLogEntity().setSmsId(inbox.getId()).setMsisdn(inbox.getMsisdn()).setKeywordId(keywordDetails.get().getId()).setAmount(chargeConfig.get().getPrice()).setAmountWithVat(chargeConfig.get().getPriceWithVat()).setValidity(chargeConfig.get().getValidity()).setChargeId(chargeConfig.get().getId()).setInsDate(Timestamp.valueOf(LocalDateTime.now())).setTidRef(responses[0]).setResponse(responses[2]);
 
-        logger.info("Success ("+ responses[1]+ ") "+ "inbox id : " + inbox.getId() + " TxnId: " + ce.getTidRef() + " MobileNo: " + inbox.getMsisdn() + " SMS:" + inbox.getSmsText());
+        logger.info("SUCCESS: (" + responses[1] + ") " + responses[2] + ", TxnId: " + ce.getTidRef());
         chargeSuccessLogEntityRepository.save(ce);
     }
 
 
     private void processFailed(InboxEntity inbox, String[] responses, Optional<ChargeConfEntity> chargeConfig, Optional<KeywordDetailsEntity> keywordDetails) {
+        failed++;
         inbox.setStatus("F");
         inboxEntityRepository.save(inbox);
         ChargeFailLogEntity ce = new ChargeFailLogEntity().setSmsId(inbox.getId()).setMsisdn(inbox.getMsisdn()).setKeywordId(keywordDetails.get().getId()).setAmount(chargeConfig.get().getPrice()).setChargeId(chargeConfig.get().getId()).setFailCode(Integer.parseInt(responses[1])).setInsDate(Timestamp.valueOf(LocalDateTime.now())).setTidRef(responses[0]).setResponse(responses[2]);
         chargeFailLogEntityRepository.save(ce);
 
-        logger.info("Failed ("+ responses[1]+ ") "+ "inbox id : " + inbox.getId() + " TxnId: " + ce.getTidRef() + " MobileNo: " + inbox.getMsisdn() + " SMS:" + inbox.getSmsText());
+        logger.info("FAILED:  (" + responses[1] + ") " + responses[2] + ", TxnId: " + ce.getTidRef());
     }
 
 
