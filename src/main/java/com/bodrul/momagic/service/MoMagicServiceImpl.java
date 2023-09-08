@@ -108,7 +108,11 @@ public class MoMagicServiceImpl {
     private void checkAppConfigStatus() {
         config = appConfEntityRepository.findById(1);
         if (config.isEmpty() || config.get().getStatus() == 0) {
+            logger.info("");
+            logger.info("-----------------------------------------");
             logger.info("AppConfig Status 0, Exiting app...");
+            logger.info("-----------------------------------------");
+            logger.info("");
             System.exit(1);
         }
     }
